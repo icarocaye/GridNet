@@ -102,7 +102,7 @@ class Discriminator(nn.Module):
 
         channels, height, width = input_shape
 
-        # Calculate output shape of image discriminator (PatchGAN)
+        # Calculate output shape of image discriminator (PatchGAN) - divide a imagem em patches e analisa cada um separadamente
         self.output_shape = (1, height // 2 ** 4, width // 2 ** 4)
 
         def discriminator_block(in_filters, out_filters, normalize=True):
