@@ -192,22 +192,34 @@ def inference_one_epoch(model, data_loader, device):
     model.eval()
     image_preds_all = []
     image_targets_all = []
+    image_conf_all = []
+    image_probs_all = []
     
     pbar = tqdm(enumerate(data_loader), total=len(data_loader))
-    for step, (imgs, image_labels) in pbar:
+    for step, imgs in pbar:
         imgs = imgs.to(device).float()
-        image_labels = image_labels.to(device).long()
         
-        image_preds = model(imgs)   #output = model(input)
-        image_preds_all += [torch.argmax(image_preds, 1).detach().cpu().numpy()]
+        image_logits = model(imgs)
 
-        image_targets_all += [image_labels.detach().cpu().numpy()]
+        # converte logits em probabilidades
+        image_probs = torch.softmax(image_logits, dim=1)
+
+        # classe prevista
+        preds = torch.argmax(image_probs, dim=1)
+
+        # confiança da classe prevista
+        confidence = torch.max(image_probs, dim=1).values
+
+        image_preds_all.append(preds.detach().cpu().numpy())
+        image_conf_all.append(confidence.detach().cpu().numpy())
+        image_probs_all.append(image_probs.detach().cpu().numpy())
     
-    image_preds_all = np.concatenate(image_preds_all, axis=0)
-    image_targets_all = np.concatenate(image_targets_all)
+    image_preds_all = np.concatenate(image_preds_all)
+    image_conf_all = np.concatenate(image_conf_all)
+    image_probs_all = np.concatenate(image_probs_all)
 
     print('test multi-class accuracy = {:.4f}'.format((image_preds_all == image_targets_all).mean()))
-    return image_preds_all
+    return image_preds_all, image_conf_all, image_probs_all
 
 if __name__ == '__main__':
     seed_everything(CFG1['seed'])
@@ -218,7 +230,7 @@ if __name__ == '__main__':
     # dataset test.csv path
     test_csv_path = r'./data/test2.csv'   #test csv
     test = pd.read_csv(test_csv_path)
-    test_ds1 = Dataset(test, './data/test_images4/', transforms=get_valid_transforms(), output_label=True) # we have label test2是老gan
+    test_ds1 = Dataset(test, './data/test_images4/', transforms=get_valid_transforms(), output_label=False) # we have label test2是老gan
 
     #构建测试集的
     #for tf_efficientnet_b5_ns
@@ -240,7 +252,7 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load('./models/{}_fold_{}_{}'.format(CFG1['model_arch'], CFG1['fold_num'], CFG1['used_epochs'][i])))
 
         with torch.no_grad():
-            tst_preds = inference_one_epoch(model, tst_loader1, device)
+            tst_preds, tst_conf, tst_probs = inference_one_epoch(model, tst_loader1, device)
             #valid_one_epoch(epoch, model, loss_fn, val_loader, device, scheduler=None, schd_loss_update=False)
 
     #tst_preds2 = np.mean(tst_preds2, axis=0) 
@@ -250,9 +262,24 @@ if __name__ == '__main__':
     #tst_preds += tst_preds2
     # tst_preds = (tst_preds*tst_preds2)**5
 
+    # escrevendo as predições para um csv
+    result = pd.DataFrame()
 
+    result["image_id"] = test["image_id"]
+    result["prediction"] = tst_preds
+    result["confidence"] = tst_conf
+
+    for i in range(tst_probs.shape[1]):
+        result[f"prob_{i}"] = tst_probs[:, i]
+    
+    result.to_csv("predictions.csv", index=False)
+    print("Predições salvas em predictions.csv")
+
+    """
+    Seção que calcula a acurácia
     #tst_preds
     test['pred'] = tst_preds
     test['T or F'] = (test['pred'] == test['label'])
     test.to_csv('submission.csv', index=False)
+    """
 
