@@ -1,53 +1,53 @@
 #!/usr/bin/env python
 # coding: utf-8
 import sys
-from vision_transformer_pytorch import VisionTransformer
+#from vision_transformer_pytorch import VisionTransformer
 
 from glob import glob
-from sklearn.model_selection import GroupKFold, StratifiedKFold
+#from sklearn.model_selection import GroupKFold, StratifiedKFold
 import cv2
-from skimage import io
+#from skimage import io
 import torch
 from torch import nn
 import os
-from datetime import datetime
-import time
+#from datetime import datetime
+#import time
 import random
 import cv2
-import torchvision
-from torchvision import transforms
+#import torchvision
+#from torchvision import transforms
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 from torch.utils.data import Dataset,DataLoader
-from torch.utils.data.sampler import SequentialSampler, RandomSampler
-from torch.cuda.amp import autocast, GradScaler
+#from torch.utils.data.sampler import SequentialSampler, RandomSampler
+#from torch.cuda.amp import autocast, GradScaler
 
-import sklearn
-import warnings
-import joblib
+#import sklearn
+#import warnings
+#import joblib
 from sklearn.metrics import roc_auc_score, log_loss
 from sklearn import metrics
-import warnings
+#import warnings
 import cv2
-import pydicom
+#import pydicom
 import timm
-from scipy.ndimage.interpolation import zoom
-from sklearn.metrics import log_loss
+#from scipy.ndimage.interpolation import zoom
+#from sklearn.metrics import log_loss
 
 CFG1 = {
     'fold_num': 0,
     'seed': 88,
     #'model_arch': 'tf_efficientnet_b5_ns',
-    'model_arch': 'wide_resnet50_2',
+    'model_arch': 'mobilenetv2_100',
     'img_size': 128,
     'valid_bs': 32,
     'num_workers': 4,
     'device': 'cuda:0',
     'tta': 5,
-    'used_epochs': [526],   #which epoch to be used 524
+    'used_epochs': [374],   #which epoch to be used 524
     'weights': [1]
 }
 
@@ -228,9 +228,11 @@ if __name__ == '__main__':
     test = pd.DataFrame()
     #test['image_id'] = list(os.listdir('./data/test_images1/'))
     # dataset test.csv path
-    test_csv_path = r'./data/test2.csv'   #test csv
+    test_csv_path = r'./data/test_rain.csv'   #test csv
     test = pd.read_csv(test_csv_path)
-    test_ds1 = Dataset(test, './data/test_images4/', transforms=get_valid_transforms(), output_label=False) # we have label test2是老gan
+    test_ds1 = Dataset(test, './data/train_rain/', transforms=get_valid_transforms(), output_label=False) # we have label test2是老gan
+
+    print(f"Dataset criado com {len(test_ds1)} imagens.")
 
     #构建测试集的
     #for tf_efficientnet_b5_ns
@@ -242,10 +244,14 @@ if __name__ == '__main__':
         pin_memory=False,
     )
 
+    print(f"Criado dataloader, len: {len(tst_loader1)}.")
+
     device = torch.device(CFG1['device'])
     tst_preds = []
     
     model = ImgClassifier(CFG1['model_arch'], train.label.nunique(), False).to(device)
+
+    print("Modelo carregado!")
 
     for i, epoch in enumerate(CFG1['used_epochs']):
         # load model parameter
@@ -254,6 +260,12 @@ if __name__ == '__main__':
         with torch.no_grad():
             tst_preds, tst_conf, tst_probs = inference_one_epoch(model, tst_loader1, device)
             #valid_one_epoch(epoch, model, loss_fn, val_loader, device, scheduler=None, schd_loss_update=False)
+
+
+    print("Inferência concluída!")
+    print("Predições:", tst_preds.shape)
+    print("Confianças:", tst_conf.shape)
+    print("Probabilidades:", tst_probs.shape)
 
     #tst_preds2 = np.mean(tst_preds2, axis=0) 
 
