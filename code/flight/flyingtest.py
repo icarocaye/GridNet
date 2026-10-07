@@ -1,101 +1,129 @@
-from pyparrot.Bebop import Bebop
-from pyparrot.DroneVision import DroneVision
+import os
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "protocol_whitelist;file,rtp,udp"
+
 import cv2
 import time
-import os
+import threading
+from pyparrot.Bebop import Bebop
 
-# classe responsável por salvar as imagens da câmera
-class UserVision:
-    def __init__(self, vision):
-        self.index = 0
-        self.vision = vision
-        self.last_save = time.time()
+# Use o mesmo .sdp que funcionou no seu teste
+SDP = "/media/icaro/Extra/GitHub/GridNet/code/flight/bebop_local.sdp"
 
-    def save_pictures(self, args):
-        current_time = time.time()
-
-        # salva uma imagem a cada 1 segundo
-        if current_time - self.last_save >= 1:
-            img = self.vision.get_latest_valid_picture()
-
-            if img is not None:
-                filename = "frames/frame_%06d.jpg" % self.index
-                cv2.imwrite(filename, img)
-                print("Imagem salva:", filename)
-
-                self.index += 1
-                self.last_save = current_time
-
-
-# criando a pasta onde as imagens serão salvas
 os.makedirs("frames", exist_ok=True)
 
-# conectando o código com o drone
+
+class FrameRecorder:
+    """Lê o stream do drone em uma thread e salva ~1 frame por segundo."""
+
+    def __init__(self, sdp_path, interval=1.0):
+        self.sdp_path = sdp_path
+        self.interval = interval
+        self.index = 0
+        self.got_first_frame = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _run(self):
+        cap = cv2.VideoCapture(self.sdp_path, cv2.CAP_FFMPEG)
+        print("Câmera aberta:", cap.isOpened())
+        last_save = 0
+
+        while not self._stop.is_set():
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+
+            self.got_first_frame.set()
+
+            now = time.time()
+            if now - last_save >= self.interval:
+                filename = "frames/frame_%06d.jpg" % self.index
+                cv2.imwrite(filename, frame)
+                print("Imagem salva:", filename)
+                self.index += 1
+                last_save = now
+
+        cap.release()
+
+
 bebop = Bebop()
 print("Conectando...")
 success = bebop.connect(10)
-print(success)
+print("Conexão:", success)
 
 if success:
-    #-------------CONFIGURAÇÕES DO DRONE--------------------
-    bebop.smart_sleep(3) # aguardando estabilizar
-    bebop.ask_for_state_update() # retorna os dados do drone
+    recorder = None
+    in_air = False
 
-    bebop.safe_takeoff(10) # ele chega a uma altura de 1~1.5 m
-    
-    bebop.set_max_vertical_speed(2) # velocidade vertical maxima de 2 m/s
-    bebop.set_max_altitude(30) # altura máxima de 30 m
-    bebop.set_max_tilt(15) # é o jeito de limitar a velocidade
-    
-    #--------------CONFIGURAÇÕES DA CÂMERA-------------------
-    bebop.set_picture_format('jpeg')
-    bebop.pan_tilt_camera_velocity(tilt_velocity=-30, pan_velocity=0, duration=3) # virando a camêra pra baixo
-    
-    # CONFIGURAR A CAMERA PRA GRAVAR DIREITINHO, NAO CONSEGUI LIDAR COM O FFMPEG
+    try:
+        bebop.smart_sleep(3)
+        bebop.ask_for_state_update()
 
-    # iniciando a captura de vídeo
-    bebopVision = DroneVision(bebop, is_bebop=True)
+        # ----- Limites de segurança (ANTES de decolar) -----
+        bebop.set_max_vertical_speed(2)   # m/s
+        bebop.set_max_altitude(30)        # m
+        bebop.set_max_tilt(15)            # graus, limita a velocidade horizontal
 
-    userVision = UserVision(bebopVision)
+        # ----- Câmera -----
+        bebop.set_picture_format('jpeg')
+        bebop.start_video_stream()
+        bebop.smart_sleep(3)
 
-    bebopVision.set_user_callback_function(
-        userVision.save_pictures,
-        user_callback_args=None
-    )
+        recorder = FrameRecorder(SDP, interval=1.0)
+        recorder.start()
 
-    successVision = bebopVision.open_video()
+        # Só voa se o vídeo estiver funcionando
+        if not recorder.got_first_frame.wait(timeout=15):
+            raise RuntimeError("Nenhum frame recebido em 15 s. Abortando antes de decolar.")
+        print("Vídeo OK, decolando...")
 
-    if successVision:
-        print("Vision successfully started!")
-    else:
-        print("Erro ao iniciar a câmera.")
+        # ----- Voo -----
+        bebop.safe_takeoff(10)
+        in_air = True
 
-    
-    #roll = movimento lateral esquerda/direita
-    #pitch = movimento pra tras/pra frente
-    #yaw = giro em torno do próprio eixo
-    #vertical_movement = pra baixo/pra cima
-    #duration = tempo pelo qual o movimento será realizado
-    bebop.fly_direct(roll=0, pitch=0, yaw=0, vertical_movement=100, duration=15) # sobe até a altura máxima
-    bebop.fly_direct(roll=0, pitch=100, yaw=0, vertical_movement=0, duration=5) # andando reto
-    
-    bebop.smart_sleep(2)
-    
-    # acessamos a velocidade que o drone atinge com esse tilt máximo
-    bebop.ask_for_state_update()
-    bebop.smart_sleep(0.5)
-    vx = bebop.sensors.sensors_dict.get("SpeedChanged_speedX", 0)
-    vy = bebop.sensors.sensors_dict.get("SpeedChanged_speedY", 0)
-    print(f"Vx = {vx} m/s")
-    print(f"Vy = {vy} m/s")    
-    
-    bebop.fly_direct(roll=0, pitch=-100, yaw=0, vertical_movement=0, duration=5) # retorno pra home
-    bebop.fly_direct(roll=0, pitch=0, yaw=0, vertical_movement=-100, duration=10) # volta pra uma altura melhor pra fazer o pouso
-    
-    # encerrando a captura de vídeo
-    bebopVision.close_video()
+        # Aponta a câmera para baixo
+        bebop.pan_tilt_camera_velocity(tilt_velocity=-30, pan_velocity=0, duration=3)
 
-    bebop.safe_land(10) # NÃO FAZ O RETURN TO HOME, FAZER MANUALMENTE
+        # roll = lateral, pitch = frente/trás, yaw = giro, vertical_movement = subir/descer
+        bebop.fly_direct(roll=0, pitch=0, yaw=0, vertical_movement=100, duration=15)
+        bebop.fly_direct(roll=0, pitch=100, yaw=0, vertical_movement=0, duration=5)
+        bebop.smart_sleep(2)
 
-    # encerrando a conexão
-    bebop.disconnect()
+        bebop.ask_for_state_update()
+        bebop.smart_sleep(0.5)
+        vx = bebop.sensors.sensors_dict.get("SpeedChanged_speedX", 0)
+        vy = bebop.sensors.sensors_dict.get("SpeedChanged_speedY", 0)
+        print(f"Vx = {vx} m/s")
+        print(f"Vy = {vy} m/s")
+
+        bebop.fly_direct(roll=0, pitch=-100, yaw=0, vertical_movement=0, duration=5)
+        bebop.fly_direct(roll=0, pitch=0, yaw=0, vertical_movement=-100, duration=10)
+
+    except (Exception, KeyboardInterrupt) as e:
+        print("Erro/interrupção durante o voo:", repr(e))
+
+    finally:
+        # Sempre tenta pousar se decolou, mesmo após erro ou Ctrl+C
+        if in_air:
+            print("Pousando...")
+            bebop.safe_land(10)
+
+        if recorder is not None:
+            recorder.stop()
+
+        try:
+            bebop.stop_video_stream()
+        except Exception:
+            pass
+
+        print("Desconectando...")
+        bebop.disconnect()
+else:
+    print("Erro ao conectar ao Bebop.")
